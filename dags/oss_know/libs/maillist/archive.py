@@ -18,8 +18,36 @@ from dateutil.relativedelta import relativedelta
 from perceval.backends.core.mbox import MBox
 from perceval.backends.core.pipermail import Pipermail
 from oss_know.libs.util.opensearch_api import OpensearchAPI
-from oss_know.libs.base_dict.opensearch_index import NSEARCH_INDEX_MAILLISTS
+from oss_know.libs.base_dict.opensearch_index import OPENSEARCH_INDEX_MAILLISTS
 
+
+
+class MyMBoxEnrich(MBoxEnrich):
+    ESSENTIAL_KEYS = ['Reference', 'In-Reply-To']
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.project_name = kwargs['project_name']
+        self.mail_list_name = kwargs['list_name']
+
+
+    def get_rich_item(self, item):
+        now_time = datetime.datetime.now()
+        eitem = super().get_rich_item(item)
+        eitem['search_key'] = {
+            'message_id': item['Message-ID'],
+            'project_name': self.project_name,
+            'mail_list_name': self.mail_list_name,
+            'timestamp': now_time.timestamp() # malin's func UTC time
+        }
+
+        for essential_key in MyMBoxEnrich.ESSENTIAL_KEYS:
+            if essential_key in item:
+                eitem[essential_key] = item[essential_key]
+        return eitem
+
+    def get_connector_name(self):
+        return 'mbox'
 
 
 class EmailArchive:
@@ -133,7 +161,8 @@ def sync_archive(opensearch_conn_info, **maillist_params):
         enrich_backend = PipermailEnrich()
 
     # Store original data to raw opensearch index
-    data2es(repo.fetch(), ocean_backend)
+    # ocean_backend.set_elastic()
+
     OS_USER = opensearch_conn_info["USER"]
     OS_PASS = opensearch_conn_info["PASSWD"]
     OS_HOST = opensearch_conn_info["HOST"]
@@ -141,6 +170,10 @@ def sync_archive(opensearch_conn_info, **maillist_params):
     OS_URL = f'https://{OS_USER}:{OS_PASS}@{OS_HOST}:{OS_PORT}'
     elastic_ocean = get_elastic(OS_URL, OPENSEARCH_INDEX_MAILLISTS, True, ocean_backend, [])
     ocean_backend.set_elastic(elastic_ocean)
+    data2es(repo.fetch(), ocean_backend)
+    enrich_backend = MyMBoxEnrich(project_name=kwargs["project_name"], list_name=kwargs["list_name"])
+    elastic_enrich = get_elastic(OS_URL, OPENSEARCH_INDEX_MAILLISTS, True, enrich_backend, [])
+    enrich_backend.set_elastic(elastic_enrich)
 
     # TODO What does the param [sortinghat] and [projects] do here?
     num_enriched = enrich_backend.enrich_items(ocean_backend)
